@@ -145,7 +145,7 @@ def process_image(model: YOLO, image_path: Path, output_dir: Path, cfg: dict) ->
             smooth_window=cfg.get("smooth_window", 7),
             score_window=cfg.get("score_window", 5),
             threshold_factor=cfg.get("threshold_factor", 0.8),
-            min_distance_deg=cfg.get("min_boundary_distance_deg", 8),
+            min_distance_deg=cfg.get("min_boundary_distance_deg", 3),
             min_sector_deg=cfg.get("min_sector_deg", 8),
             merge_color_distance=cfg.get("merge_color_distance", 0.08),
             weak_boundary_ratio=cfg.get("weak_boundary_ratio", 0.0),

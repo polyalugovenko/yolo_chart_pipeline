@@ -52,7 +52,7 @@ clustering:
   smooth_window: 7
   score_window: 5
   threshold_factor: 0.8
-  min_boundary_distance_deg: 8
+  min_boundary_distance_deg: 3
   min_sector_deg: 8
   merge_color_distance: 0.08
   weak_boundary_ratio: 0.0

@@ -389,6 +389,8 @@ def _merge_close_boundaries(
     boundaries: list,
     scores: np.ndarray,
     min_distance: int,
+    profile: np.ndarray = None,
+    distinct_color_distance: float = 0.16,
 ) -> list:
     merged = sorted(int(b) for b in boundaries)
     if len(merged) < 2:
@@ -409,7 +411,31 @@ def _merge_close_boundaries(
         if not close_pairs:
             break
 
-        i, j, _ = min(close_pairs, key=lambda p: p[2])
+        pair_to_merge = None
+        for i, j, _ in sorted(close_pairs, key=lambda p: p[2]):
+            if profile is None or len(merged) < 3:
+                pair_to_merge = (i, j)
+                break
+
+            start = merged[i]
+            end = merged[j]
+            prev_boundary = merged[i - 1]
+            next_boundary = merged[(j + 1) % len(merged)]
+
+            tiny_color = _sector_mean_color(profile, start, end)
+            left_color = _sector_mean_color(profile, prev_boundary, start)
+            right_color = _sector_mean_color(profile, end, next_boundary)
+            left_dist = float(np.linalg.norm(tiny_color - left_color))
+            right_dist = float(np.linalg.norm(tiny_color - right_color))
+
+            if min(left_dist, right_dist) < distinct_color_distance:
+                pair_to_merge = (i, j)
+                break
+
+        if pair_to_merge is None:
+            break
+
+        i, j = pair_to_merge
         drop = j if scores[merged[i]] >= scores[merged[j]] else i
         merged.pop(drop)
         changed = True
@@ -676,7 +702,7 @@ def detect_sector_boundaries(
     smooth_window: int = 7,
     score_window: int = 5,
     threshold_factor: float = 0.8,
-    min_distance_deg: int = 8,
+    min_distance_deg: int = 3,
     min_sector_deg: int = 8,
     merge_color_distance: float = 0.08,
     weak_boundary_ratio: float = 0.0,
@@ -738,7 +764,12 @@ def detect_sector_boundaries(
         )
     candidates = np.unique(np.concatenate([threshold_candidates, top_candidates]))
     boundaries = _non_max_suppression_circular(score, candidates, min_distance_deg)
-    boundaries = _merge_close_boundaries(boundaries, score, min_sector_deg)
+    boundaries = _merge_close_boundaries(
+        boundaries,
+        score,
+        min_sector_deg,
+        profile=full_profile,
+    )
     boundaries = _merge_by_sector_quality(
         boundaries,
         full_profile,
