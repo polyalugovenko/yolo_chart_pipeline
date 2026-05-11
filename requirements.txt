@@ -1,0 +1,17 @@
+# Core
+ultralytics>=8.3.0
+opencv-python>=4.9.0
+pyyaml>=6.0
+scikit-learn>=1.4.0
+numpy>=1.26.0
+tqdm>=4.66.0
+
+# Для конвертации det→seg (SAM)
+segment-anything>=1.0
+torch>=2.1.0
+torchvision>=0.16.0
+
+# --- Для визуализации (скрипт visualize_polygons.py) ---
+matplotlib>=3.8.0         # Графики и отрисовка в Jupyter/скриптах
+# Утилиты
+pathlib; python_version < '3.4'
