@@ -144,9 +144,13 @@ def process_image(model: YOLO, image_path: Path, output_dir: Path, cfg: dict) ->
             polar_mask=polar_data["polar_mask"],
             smooth_window=cfg.get("smooth_window", 7),
             score_window=cfg.get("score_window", 5),
-            threshold_factor=cfg.get("threshold_factor", 3.0),
-            min_distance_deg=cfg.get("min_boundary_distance_deg", 10),
-            min_sector_deg=cfg.get("min_sector_deg", 12),
+            threshold_factor=cfg.get("threshold_factor", 0.8),
+            min_distance_deg=cfg.get("min_boundary_distance_deg", 8),
+            min_sector_deg=cfg.get("min_sector_deg", 8),
+            merge_color_distance=cfg.get("merge_color_distance", 0.08),
+            weak_boundary_ratio=cfg.get("weak_boundary_ratio", 0.0),
+            radial_bands=cfg.get("radial_bands", 3),
+            max_candidate_peaks=cfg.get("max_candidate_peaks", 0),
         )
 
         boundary_vis_path = output_dir / f"{stem}_boundaries.png"

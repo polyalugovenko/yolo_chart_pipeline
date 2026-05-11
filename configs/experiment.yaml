@@ -49,3 +49,12 @@ clustering:
   conf_threshold: 0.5
   imgsz: 640
   min_pixels: 100
+  smooth_window: 7
+  score_window: 5
+  threshold_factor: 0.8
+  min_boundary_distance_deg: 8
+  min_sector_deg: 8
+  merge_color_distance: 0.08
+  weak_boundary_ratio: 0.0
+  radial_bands: 3
+  max_candidate_peaks: 0

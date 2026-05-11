@@ -449,32 +449,56 @@ def _sector_channel_mean(profile: np.ndarray, start: int, end: int, channel: int
     return float(np.mean(values)) if len(values) else 0.0
 
 
-def detect_sector_boundaries(
-    polar_lab: np.ndarray,
-    polar_mask: np.ndarray = None,
-    smooth_window: int = 7,
-    score_window: int = 5,
-    threshold_factor: float = 2.5,
-    min_distance_deg: int = 6,
-    min_sector_deg: int = 4,
-) -> dict:
-    """
-    Detect pie-sector boundaries from the angular Lab color profile.
+def _angle_slice(values: np.ndarray, start: int, end: int) -> np.ndarray:
+    if start < end:
+        return values[start:end]
+    return np.concatenate([values[start:], values[:end]], axis=0)
 
-    Returns boundaries in degrees and sector percentages between consecutive
-    boundaries. This is a deterministic baseline, not a CNN feature pipeline.
-    """
-    profile = compute_angle_color_profile(
-        polar_lab,
-        polar_mask=polar_mask,
-        smooth_window=smooth_window,
-    )
 
+def _sector_mean_color(profile: np.ndarray, start: int, end: int) -> np.ndarray:
+    values = _angle_slice(profile, start, end)
+    if len(values) == 0:
+        return np.zeros(profile.shape[1], dtype=np.float32)
+    return np.mean(values, axis=0)
+
+
+def _build_sectors(boundaries: list, profile: np.ndarray) -> list:
+    sectors = []
+    if len(boundaries) < 2:
+        return sectors
+
+    boundaries = sorted(int(b) for b in boundaries)
+    for idx, start in enumerate(boundaries):
+        end = boundaries[(idx + 1) % len(boundaries)]
+        span = (end - start) % 360
+        if span == 0:
+            continue
+        mean_color = _sector_mean_color(profile, start, end)
+        sectors.append(
+            {
+                "sector": idx + 1,
+                "start_angle": int(start),
+                "end_angle": int(end),
+                "angle_deg": float(span),
+                "percent": float(span * 100.0 / 360.0),
+                "mean_lab_l": float(mean_color[0]),
+                "mean_lab_a": float(mean_color[1]),
+                "mean_lab_b": float(mean_color[2]),
+            }
+        )
+    return sectors
+
+
+def _compute_boundary_score(profile: np.ndarray, score_window: int) -> tuple[np.ndarray, np.ndarray]:
     prev_profile = np.roll(profile, 1, axis=0)
     next_profile = np.roll(profile, -1, axis=0)
-    raw_score = np.linalg.norm(next_profile - prev_profile, axis=1) / 2.0
-    score = circular_smooth_1d(raw_score, score_window)
+    central_score = np.linalg.norm(next_profile - prev_profile, axis=1) / 2.0
+    direct_score = np.linalg.norm(profile - prev_profile, axis=1)
+    raw_score = np.maximum(central_score, direct_score)
+    return raw_score.astype(np.float32), circular_smooth_1d(raw_score, score_window)
 
+
+def _robust_threshold(score: np.ndarray, threshold_factor: float, fallback_percentile: float = 85) -> float:
     median = float(np.median(score))
     mad = float(np.median(np.abs(score - median)))
     robust_sigma = 1.4826 * mad
@@ -483,36 +507,157 @@ def detect_sector_boundaries(
 
     threshold = median + threshold_factor * robust_sigma
     if threshold <= median:
-        threshold = float(np.percentile(score, 90))
+        threshold = float(np.percentile(score, fallback_percentile))
+    return float(threshold)
+
+
+def _normalize_score(score: np.ndarray) -> np.ndarray:
+    median = np.median(score)
+    mad = np.median(np.abs(score - median))
+    scale = 1.4826 * mad
+    if scale < 1e-6:
+        scale = np.std(score)
+    if scale < 1e-6:
+        return np.zeros_like(score, dtype=np.float32)
+    return np.clip((score - median) / scale, 0.0, None).astype(np.float32)
+
+
+def _merge_by_sector_quality(
+    boundaries: list,
+    profile: np.ndarray,
+    score: np.ndarray,
+    min_sector_deg: int,
+    merge_color_distance: float,
+    weak_boundary_ratio: float,
+) -> list:
+    boundaries = sorted(int(b) for b in boundaries)
+    if len(boundaries) < 3:
+        return boundaries
+
+    max_score = float(np.max(score)) if len(score) else 0.0
+    weak_score = weak_boundary_ratio * max_score
+
+    changed = True
+    while changed and len(boundaries) >= 3:
+        changed = False
+        n = len(boundaries)
+
+        # First remove tiny sectors by dropping the weaker of their two borders.
+        for idx in range(n):
+            start = boundaries[idx]
+            end = boundaries[(idx + 1) % n]
+            span = (end - start) % 360
+            if span == 0 or span >= min_sector_deg:
+                continue
+            drop = start if score[start] <= score[end] else end
+            boundaries.remove(drop)
+            changed = True
+            break
+        if changed:
+            continue
+
+        # Then remove borders between nearly identical neighboring colors.
+        n = len(boundaries)
+        for idx, boundary in enumerate(list(boundaries)):
+            prev_boundary = boundaries[idx - 1]
+            next_boundary = boundaries[(idx + 1) % n]
+            left_color = _sector_mean_color(profile, prev_boundary, boundary)
+            right_color = _sector_mean_color(profile, boundary, next_boundary)
+            color_dist = float(np.linalg.norm(left_color - right_color))
+
+            if color_dist < merge_color_distance:
+                boundaries.remove(boundary)
+                changed = True
+                break
+
+            if weak_boundary_ratio > 0 and score[boundary] < weak_score and color_dist < merge_color_distance * 2.0:
+                boundaries.remove(boundary)
+                changed = True
+                break
+
+    return sorted(boundaries)
+
+
+def detect_sector_boundaries(
+    polar_lab: np.ndarray,
+    polar_mask: np.ndarray = None,
+    smooth_window: int = 7,
+    score_window: int = 5,
+    threshold_factor: float = 0.8,
+    min_distance_deg: int = 8,
+    min_sector_deg: int = 8,
+    merge_color_distance: float = 0.08,
+    weak_boundary_ratio: float = 0.0,
+    radial_bands: int = 3,
+    max_candidate_peaks: int = 0,
+) -> dict:
+    """
+    Detect pie-sector boundaries from the angular Lab color profile.
+
+    Returns boundaries in degrees and sector percentages between consecutive
+    boundaries. This is a deterministic baseline, not a CNN feature pipeline.
+    """
+    full_profile = compute_angle_color_profile(
+        polar_lab,
+        polar_mask=polar_mask,
+        smooth_window=smooth_window,
+    )
+
+    raw_score, full_score = _compute_boundary_score(full_profile, score_window)
+    normalized_scores = [_normalize_score(full_score)]
+
+    H = polar_lab.shape[0]
+    if radial_bands > 1 and H >= radial_bands * 4:
+        for band_idx in range(radial_bands):
+            r0 = int(round(band_idx * H / radial_bands))
+            r1 = int(round((band_idx + 1) * H / radial_bands))
+            if r1 - r0 < 4:
+                continue
+            band_mask = None if polar_mask is None else polar_mask[r0:r1, :]
+            band_profile = compute_angle_color_profile(
+                polar_lab[r0:r1, :, :],
+                polar_mask=band_mask,
+                smooth_window=smooth_window,
+            )
+            _, band_score = _compute_boundary_score(band_profile, score_window)
+            normalized_scores.append(_normalize_score(band_score))
+
+    score = np.mean(np.vstack(normalized_scores), axis=0).astype(np.float32)
+    score = circular_smooth_1d(score, max(1, score_window))
+    threshold = _robust_threshold(score, threshold_factor, fallback_percentile=75)
 
     left = np.roll(score, 1)
     right = np.roll(score, -1)
-    candidates = np.where((score >= left) & (score >= right) & (score >= threshold))[0]
+    local_peaks = np.where((score >= left) & (score >= right))[0]
+    threshold_candidates = local_peaks[score[local_peaks] >= threshold]
+    top_candidates = np.array([], dtype=int)
+    if max_candidate_peaks > 0 and len(local_peaks) > 0:
+        min_top_score = max(threshold * 0.75, float(np.percentile(score, 70)))
+        order = np.argsort(score[local_peaks])[::-1]
+        top_candidates = np.array(
+            [
+                int(angle)
+                for angle in local_peaks[order[:max_candidate_peaks]]
+                if score[int(angle)] >= min_top_score
+            ],
+            dtype=int,
+        )
+    candidates = np.unique(np.concatenate([threshold_candidates, top_candidates]))
     boundaries = _non_max_suppression_circular(score, candidates, min_distance_deg)
     boundaries = _merge_close_boundaries(boundaries, score, min_sector_deg)
+    boundaries = _merge_by_sector_quality(
+        boundaries,
+        full_profile,
+        score,
+        min_sector_deg=min_sector_deg,
+        merge_color_distance=merge_color_distance,
+        weak_boundary_ratio=weak_boundary_ratio,
+    )
 
-    sectors = []
-    if len(boundaries) >= 2:
-        for idx, start in enumerate(boundaries):
-            end = boundaries[(idx + 1) % len(boundaries)]
-            span = (end - start) % 360
-            if span == 0:
-                continue
-            sectors.append(
-                {
-                    "sector": idx + 1,
-                    "start_angle": int(start),
-                    "end_angle": int(end),
-                    "angle_deg": float(span),
-                    "percent": float(span * 100.0 / 360.0),
-                    "mean_lab_l": _sector_channel_mean(profile, start, end, 0),
-                    "mean_lab_a": _sector_channel_mean(profile, start, end, 1),
-                    "mean_lab_b": _sector_channel_mean(profile, start, end, 2),
-                }
-            )
+    sectors = _build_sectors(boundaries, full_profile)
 
     return {
-        "profile": profile,
+        "profile": full_profile,
         "raw_score": raw_score.astype(np.float32),
         "score": score.astype(np.float32),
         "threshold": float(threshold),
