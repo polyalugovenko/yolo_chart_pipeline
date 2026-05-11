@@ -14,9 +14,7 @@ from ultralytics import YOLO
 from polar_transform import (
     apply_polar_transform,
     detect_sector_boundaries,
-    extract_polar_features,
     visualize_boundary_detection,
-    visualize_features,
     visualize_polar,
 )
 
@@ -50,15 +48,6 @@ def bgr_to_normalized_lab(image_bgr: np.ndarray) -> np.ndarray:
     lab[:, :, 2] = (lab[:, :, 2] - 128.0) / 127.0
     lab[:, :, 1:] = np.clip(lab[:, :, 1:], -1.0, 1.0)
     return lab
-
-
-def save_features(features: np.ndarray, output_path: Path) -> None:
-    df = pd.DataFrame(
-        features,
-        columns=[f"feat_{feature_idx}" for feature_idx in range(features.shape[1])],
-    )
-    df["angle"] = np.arange(features.shape[0])
-    df.to_csv(output_path, index=False)
 
 
 def save_boundary_scores(detection: dict, output_path: Path) -> None:
@@ -129,15 +118,6 @@ def process_image(model: YOLO, image_path: Path, output_dir: Path, cfg: dict) ->
         polar_path = output_dir / f"{stem}_polar.png"
         visualize_polar(image, polar_data, polar_path)
         stats["files"].append(str(polar_path))
-
-        features = extract_polar_features(polar_lab, polar_data["polar_mask"])
-        features_path = output_dir / f"{stem}_features.csv"
-        save_features(features, features_path)
-        stats["files"].append(str(features_path))
-
-        feature_vis_path = output_dir / f"{stem}_features_detailed.png"
-        visualize_features(features, polar_data, feature_vis_path)
-        stats["files"].append(str(feature_vis_path))
 
         detection = detect_sector_boundaries(
             polar_lab,

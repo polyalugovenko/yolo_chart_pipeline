@@ -38,17 +38,14 @@ conversion:
   iou_threshold: 0.6                       # Мин. IoU bbox↔mask
   approx_epsilon_ratio: 0.005              # Упрощение полигона
 
-# ================= КЛАСТЕРИЗАЦИЯ (DBSCAN) =================
+# ================= ГРАНИЦЫ СЕКТОРОВ =================
 clustering:
-  color_tolerance: 15    # Допуск для группировки похожих цветов [0-50]
-  min_sector_area: 50    # Мин. площадь сектора в пикселях
   ring_inner_ratio: 0.35 # Внутренний радиус кольца (относительно R)
   ring_outer_ratio: 0.95 # Внешний радиус кольца
   
   # Прочее
   conf_threshold: 0.5
   imgsz: 640
-  min_pixels: 100
   smooth_window: 7
   score_window: 5
   threshold_factor: 0.8
