@@ -58,3 +58,5 @@ clustering:
   weak_boundary_ratio: 0.0
   radial_bands: 3
   max_candidate_peaks: 0
+  optimize_boundaries: true
+  optimizer_keep_score: 0.12

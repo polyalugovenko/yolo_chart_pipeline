@@ -151,6 +151,8 @@ def process_image(model: YOLO, image_path: Path, output_dir: Path, cfg: dict) ->
             weak_boundary_ratio=cfg.get("weak_boundary_ratio", 0.0),
             radial_bands=cfg.get("radial_bands", 3),
             max_candidate_peaks=cfg.get("max_candidate_peaks", 0),
+            optimize_boundaries=cfg.get("optimize_boundaries", True),
+            optimizer_keep_score=cfg.get("optimizer_keep_score", 0.16),
         )
 
         boundary_vis_path = output_dir / f"{stem}_boundaries.png"

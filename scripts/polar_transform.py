@@ -489,6 +489,98 @@ def _build_sectors(boundaries: list, profile: np.ndarray) -> list:
     return sectors
 
 
+def _segment_values(profile: np.ndarray, start: int, end: int) -> np.ndarray:
+    return _angle_slice(profile, start, end)
+
+
+def _segment_sse(profile: np.ndarray, start: int, end: int) -> float:
+    values = _segment_values(profile, start, end)
+    if len(values) <= 1:
+        return 0.0
+    mean = np.mean(values, axis=0)
+    centered = values - mean
+    return float(np.sum(centered * centered))
+
+
+def _circular_span(start: int, end: int, period: int = 360) -> int:
+    span = (int(end) - int(start)) % period
+    return period if span == 0 else span
+
+
+def _optimize_boundaries_by_merge(
+    boundaries: list,
+    profile: np.ndarray,
+    score: np.ndarray,
+    min_keep_score: float = 0.16,
+    color_weight: float = 1.0,
+    score_weight: float = 0.08,
+    error_weight: float = 0.45,
+    small_sector_bonus: float = 0.04,
+    max_iterations: int = 200,
+) -> list:
+    """
+    Remove boundaries that do not meaningfully improve the global segmentation.
+
+    A boundary is useful if the neighboring sectors have different colors, if
+    merging them increases within-sector error, or if the local boundary score is
+    strong. This keeps small but real sectors better than a pure min-size rule.
+    """
+    boundaries = sorted(int(b) for b in boundaries)
+    if len(boundaries) < 3:
+        return boundaries
+
+    score_max = float(np.max(score)) if len(score) else 0.0
+    score_scale = score_max if score_max > 1e-6 else 1.0
+
+    for _ in range(max_iterations):
+        if len(boundaries) < 3:
+            break
+
+        removal_options = []
+        n = len(boundaries)
+        for idx, boundary in enumerate(boundaries):
+            prev_boundary = boundaries[idx - 1]
+            next_boundary = boundaries[(idx + 1) % n]
+
+            left_values = _segment_values(profile, prev_boundary, boundary)
+            right_values = _segment_values(profile, boundary, next_boundary)
+            if len(left_values) == 0 or len(right_values) == 0:
+                removal_options.append((0.0, boundary))
+                continue
+
+            left_color = np.mean(left_values, axis=0)
+            right_color = np.mean(right_values, axis=0)
+            color_dist = float(np.linalg.norm(left_color - right_color))
+
+            left_sse = _segment_sse(profile, prev_boundary, boundary)
+            right_sse = _segment_sse(profile, boundary, next_boundary)
+            merged_sse = _segment_sse(profile, prev_boundary, next_boundary)
+            merged_span = max(1, _circular_span(prev_boundary, next_boundary))
+            error_gain = max(0.0, (merged_sse - left_sse - right_sse) / merged_span)
+
+            left_span = _circular_span(prev_boundary, boundary)
+            right_span = _circular_span(boundary, next_boundary)
+            small_span = min(left_span, right_span)
+            small_bonus = small_sector_bonus if small_span <= 12 and color_dist > 0.18 else 0.0
+
+            boundary_score = float(score[boundary]) / score_scale
+            keep_score = (
+                color_weight * color_dist
+                + error_weight * np.sqrt(error_gain)
+                + score_weight * boundary_score
+                + small_bonus
+            )
+            removal_options.append((keep_score, boundary))
+
+        weakest_score, weakest_boundary = min(removal_options, key=lambda item: item[0])
+        if weakest_score >= min_keep_score:
+            break
+
+        boundaries.remove(weakest_boundary)
+
+    return sorted(boundaries)
+
+
 def _compute_boundary_score(profile: np.ndarray, score_window: int) -> tuple[np.ndarray, np.ndarray]:
     prev_profile = np.roll(profile, 1, axis=0)
     next_profile = np.roll(profile, -1, axis=0)
@@ -590,6 +682,8 @@ def detect_sector_boundaries(
     weak_boundary_ratio: float = 0.0,
     radial_bands: int = 3,
     max_candidate_peaks: int = 0,
+    optimize_boundaries: bool = True,
+    optimizer_keep_score: float = 0.16,
 ) -> dict:
     """
     Detect pie-sector boundaries from the angular Lab color profile.
@@ -653,6 +747,13 @@ def detect_sector_boundaries(
         merge_color_distance=merge_color_distance,
         weak_boundary_ratio=weak_boundary_ratio,
     )
+    if optimize_boundaries:
+        boundaries = _optimize_boundaries_by_merge(
+            boundaries,
+            full_profile,
+            score,
+            min_keep_score=optimizer_keep_score,
+        )
 
     sectors = _build_sectors(boundaries, full_profile)
 
